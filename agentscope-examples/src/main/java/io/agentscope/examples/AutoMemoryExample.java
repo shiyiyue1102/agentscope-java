@@ -2,6 +2,7 @@ package io.agentscope.examples;
 
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
+import io.agentscope.core.memory.LongTermMemoryMode;
 import io.agentscope.core.memory.Memory;
 import io.agentscope.core.memory.autocontext.AutoContextConfig;
 import io.agentscope.core.memory.autocontext.AutoContextMemory;
@@ -39,7 +40,7 @@ public class AutoMemoryExample {
         DashScopeChatModel chatModel =
                 DashScopeChatModel.builder()
                         .apiKey("sk-adf484b62c264980b2688f7b37324582")
-                        .modelName("qwen-plus")
+                        .modelName("qwen-max")
                         .stream(true)
                         .enableThinking(true)
                         .formatter(new DashScopeChatFormatter())
@@ -54,7 +55,6 @@ public class AutoMemoryExample {
         Mem0LongTermMemory longTermMemory = builder.build();
         AutoContextConfig autoContextConfig = new AutoContextConfig();
         autoContextConfig.setContextOffLoader(new LocalFileContextOffLoader(baseDir));
-        autoContextConfig.setMsgThreshold(10);
         autoContextConfig.setLastKeep(10);
         Memory memory = new AutoContextMemory(autoContextConfig, sessionId, chatModel);
 
@@ -72,6 +72,7 @@ public class AutoMemoryExample {
                         .model(chatModel)
                         .memory(memory)
                         .longTermMemory(longTermMemory)
+                        .longTermMemoryMode(LongTermMemoryMode.AGENT_CONTROL)
                         .enablePlan()
                         .toolkit(toolkit)
                         .build();

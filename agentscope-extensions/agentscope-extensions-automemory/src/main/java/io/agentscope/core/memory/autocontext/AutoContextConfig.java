@@ -18,7 +18,7 @@ public class AutoContextConfig {
 
     int msgThreshold = 100;
 
-    int lastKeep = 100;
+    int lastKeep = 50;
 
     int sessionId;
 

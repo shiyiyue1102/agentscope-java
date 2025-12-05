@@ -1306,9 +1306,9 @@ public class ReActAgent extends AgentBase {
          * </ul>
          */
         private void configurePlan() {
-            toolkit.createToolGroup("plan_note", "Plan Notebook", true);
+            toolkit.createToolGroup("plan_related", "Plan Notebook", true);
             // Register plan tools to toolkit
-            toolkit.registerTool(planNotebook, "plan_note");
+            toolkit.registerTool(planNotebook, "plan_related");
 
             // Add plan hint hook
             Hook planHintHook =

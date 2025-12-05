@@ -2,6 +2,7 @@ package io.agentscope.core.memory.autocontext;
 
 import io.agentscope.core.agent.accumulator.ReasoningContext;
 import io.agentscope.core.memory.Memory;
+import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
@@ -149,8 +150,200 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
         return new ArrayList<>(workingMemoryStorage.getMessages());
     }
 
+    /**
+     * Summarize current round of conversation messages.
+     *
+     * <p>This method is called when historical messages have been compressed and offloaded,
+     * but the context still exceeds the limit. This indicates that the current round's content
+     * is too large and needs compression.
+     *
+     * <p>Strategy:
+     * 1. Find the latest user message
+     * 2. Merge and compress all messages after it (typically tool calls and tool results,
+     *    usually no assistant message yet)
+     * 3. Preserve tool call interfaces (name, parameters)
+     * 4. Compress tool results, merging multiple results and keeping key information
+     *
+     * @param rawMessages the list of messages to process
+     * @return true if summary was actually performed, false otherwise
+     */
     private boolean summaryCurrentRoundMessages(List<Msg> rawMessages) {
+        if (rawMessages == null || rawMessages.isEmpty()) {
+            return false;
+        }
+
+        // Step 1: Find the latest user message
+        int latestUserIndex = -1;
+        for (int i = rawMessages.size() - 1; i >= 0; i--) {
+            Msg msg = rawMessages.get(i);
+            if (msg.getRole() == MsgRole.USER) {
+                latestUserIndex = i;
+                break;
+            }
+        }
+
+        // If no user message found, nothing to summarize
+        if (latestUserIndex < 0) {
+            log.info("No user message found, skipping current round summary");
+            return false;
+        }
+
+        // Step 2: Check if there are messages after the user message
+        if (latestUserIndex >= rawMessages.size() - 1) {
+            log.info("No messages after latest user message, skipping summary");
+            return false;
+        }
+
+        // Step 3: Extract messages after the latest user message
+        int startIndex = latestUserIndex + 1;
+        int endIndex = rawMessages.size() - 1;
+
+        List<Msg> messagesToCompress = new ArrayList<>();
+        for (int i = startIndex; i <= endIndex; i++) {
+            messagesToCompress.add(rawMessages.get(i));
+        }
+
+        log.info(
+                "Compressing current round messages after user at index {}, message count {}",
+                latestUserIndex,
+                messagesToCompress.size());
+
+        // Step 4: Merge and compress messages (typically tool calls and results)
+        Msg compressedMsg = mergeAndCompressCurrentRoundMessages(messagesToCompress);
+
+        // Step 5: Replace original messages with compressed one
+        rawMessages.subList(startIndex, endIndex + 1).clear();
+        rawMessages.add(startIndex, compressedMsg);
+
+        log.info(
+                "Replaced {} messages with 1 compressed message at index {}",
+                messagesToCompress.size(),
+                startIndex);
         return true;
+    }
+
+    /**
+     * Merge and compress current round messages (typically tool calls and tool results).
+     *
+     * @param messages the messages to merge and compress
+     * @return compressed message
+     */
+    private Msg mergeAndCompressCurrentRoundMessages(List<Msg> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return null;
+        }
+
+        // Collect tool information: preserve tool call interfaces, compress results
+        StringBuilder toolInfo = new StringBuilder();
+        toolInfo.append("<current_round_tool_calls>\n");
+
+        String uuid = null;
+        List<Msg> originalMessages = new ArrayList<>(messages);
+
+        for (Msg msg : messages) {
+            List<ContentBlock> content = msg.getContent();
+            if (content != null) {
+                for (ContentBlock block : content) {
+                    if (block instanceof ToolUseBlock toolUse) {
+                        // Preserve tool call interface (name, parameters)
+                        String toolName = toolUse.getName() != null ? toolUse.getName() : "unknown";
+                        String toolId = toolUse.getId() != null ? toolUse.getId() : "";
+                        toolInfo.append(
+                                String.format("Tool Call: %s (ID: %s)\n", toolName, toolId));
+                        if (toolUse.getInput() != null && !toolUse.getInput().isEmpty()) {
+                            toolInfo.append("  Parameters: ")
+                                    .append(toolUse.getInput().toString())
+                                    .append("\n");
+                        }
+                    } else if (block instanceof ToolResultBlock toolResult) {
+                        // Compress tool result output
+                        String toolName =
+                                toolResult.getName() != null ? toolResult.getName() : "unknown";
+                        String toolId = toolResult.getId() != null ? toolResult.getId() : "";
+                        toolInfo.append(
+                                String.format("Tool Result: %s (ID: %s)\n", toolName, toolId));
+
+                        List<ContentBlock> output = toolResult.getOutput();
+                        if (output != null && !output.isEmpty()) {
+                            String outputText =
+                                    output.stream()
+                                            .filter(b -> b instanceof TextBlock)
+                                            .map(b -> ((TextBlock) b).getText())
+                                            .filter(text -> text != null)
+                                            .collect(java.util.stream.Collectors.joining("\n"));
+
+                            if (outputText.length() > 500) {
+                                toolInfo.append("  Result: ")
+                                        .append(outputText.substring(0, 500))
+                                        .append("...\n");
+                            } else {
+                                toolInfo.append("  Result: ").append(outputText).append("\n");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        toolInfo.append("</current_round_tool_calls>");
+
+        // Offload original messages if available
+        if (contextOffLoader != null) {
+            uuid = UUID.randomUUID().toString();
+            contextOffLoader.offload(uuid, originalMessages);
+        }
+
+        // Use model to generate a compressed summary
+        String compressedSummary = generateCurrentRoundSummary(toolInfo.toString(), uuid);
+
+        // Create a compressed message
+        return Msg.builder()
+                .role(MsgRole.ASSISTANT)
+                .name("assistant")
+                .content(TextBlock.builder().text(compressedSummary).build())
+                .build();
+    }
+
+    /**
+     * Generate a compressed summary of current round messages using the model.
+     *
+     * @param toolInfo the information about tool calls and results
+     * @param offloadUuid the UUID of offloaded content (if any)
+     * @return compressed summary text
+     */
+    private String generateCurrentRoundSummary(String toolInfo, String offloadUuid) {
+        GenerateOptions options = GenerateOptions.builder().build();
+        ReasoningContext context = new ReasoningContext("current_round_compress");
+
+        String compressPrompt = String.format(Prompts.CURRENT_ROUND_COMPRESS_PROMPT, toolInfo);
+
+        List<Msg> newMessages = new ArrayList<>();
+        newMessages.add(
+                Msg.builder()
+                        .role(MsgRole.USER)
+                        .name("user")
+                        .content(TextBlock.builder().text(compressPrompt).build())
+                        .build());
+
+        Msg block =
+                model.stream(newMessages, null, options)
+                        .concatMap(chunk -> processChunk(chunk, context))
+                        .then(Mono.defer(() -> Mono.just(context.buildFinalMessage())))
+                        .onErrorResume(InterruptedException.class, Mono::error)
+                        .block();
+
+        String compressedText = block != null ? block.getTextContent() : toolInfo;
+
+        String result =
+                String.format(
+                        Prompts.COMPRESSED_CURRENT_ROUND_FORMAT,
+                        compressedText,
+                        offloadUuid != null
+                                ? String.format(
+                                        Prompts.COMPRESSED_CURRENT_ROUND_OFFLOAD_HINT, offloadUuid)
+                                : "");
+
+        return result;
     }
 
     /**
@@ -351,15 +544,10 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
         ReasoningContext context = new ReasoningContext("conversation_summary");
 
         String summaryContentFormat =
-                "<conversation_summary>%s</conversation_summary>\n"
-                    + "<hint> This is a summary of previous conversation rounds. You can use this"
-                    + " information as historical context for future reference.\n"
-                        + ((offloadUuid != null)
-                                ? "<hint> The original conversation is stored in the offload "
-                                        + "with working_context_offload_uuid: "
-                                        + offloadUuid
-                                        + ". If you need to retrieve the full conversation, please"
-                                        + " use the context_reload tool with this UUID.</hint>"
+                Prompts.CONVERSATION_SUMMARY_FORMAT
+                        + (offloadUuid != null
+                                ? String.format(
+                                        Prompts.CONVERSATION_SUMMARY_OFFLOAD_HINT, offloadUuid)
                                 : "");
 
         List<Msg> newMessages = new ArrayList<>();
@@ -477,15 +665,7 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
                                         + "..."
                                 : textContent;
 
-                String offloadHint =
-                        String.format(
-                                "%s\n"
-                                    + "<hint> This message content has been offloaded due to large"
-                                    + " size. The original content is stored with"
-                                    + " working_context_offload_uuid: %s. If you need to retrieve"
-                                    + " the full content, please use the context_reload tool with"
-                                    + " this UUID.</hint>",
-                                preview, uuid);
+                String offloadHint = String.format(Prompts.OFFLOAD_HINT_FORMAT, preview, uuid);
 
                 // Create replacement message preserving original role and name
                 Msg replacementMsg =
@@ -610,15 +790,10 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
         GenerateOptions options = GenerateOptions.builder().build();
         ReasoningContext context = new ReasoningContext("tool_compress");
         String compressContentFormat =
-                "<compressed_history>%s</compressed_history>\n"
-                        + "<hint> You can use this information as historical context for future"
-                        + " reference in carrying out your tasks\n"
+                Prompts.COMPRESSED_HISTORY_FORMAT
                         + ((offloadUUid != null)
-                                ? "<hint> the original tools invocation is stored in the offload"
-                                        + " with working_context_offload_uuid: "
-                                        + offloadUUid
-                                        + ",if you need to retrieve it, please use the context"
-                                        + " offload tool to get it\n"
+                                ? String.format(
+                                        Prompts.COMPRESSED_HISTORY_OFFLOAD_HINT, offloadUUid)
                                 : "");
         List<Msg> newMessages = new ArrayList<>();
         newMessages.add(
