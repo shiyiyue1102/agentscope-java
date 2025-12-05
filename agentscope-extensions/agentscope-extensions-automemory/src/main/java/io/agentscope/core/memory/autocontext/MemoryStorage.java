@@ -3,7 +3,7 @@ package io.agentscope.core.memory.autocontext;
 import io.agentscope.core.message.Msg;
 import java.util.List;
 
-public interface MessageStorage {
+public interface MemoryStorage {
 
     void addMessage(Msg message);
 

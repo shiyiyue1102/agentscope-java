@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-public class FileSysMemoryStorage implements MessageStorage {
+public class FileSysMemoryStorage implements MemoryStorage {
 
     private final List<Msg> messages = new CopyOnWriteArrayList<>();
 
