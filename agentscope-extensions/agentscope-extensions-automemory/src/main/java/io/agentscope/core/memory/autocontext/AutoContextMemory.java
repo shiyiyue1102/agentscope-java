@@ -89,18 +89,14 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
         }
 
         log.info(
-                "msg count reached threshold "
-                        + msgCountReached
-                        + ", msg count "
-                        + currentContextMessages.size()
-                        + ", token reached threshold "
-                        + tokenCounterReached
-                        + ",token count "
-                        + calculateToken
-                        + ",max token limit "
-                        + autoContextConfig.maxToken
-                        + ",threshold count "
-                        + thresholdToken);
+                "msg count reached threshold {}, msg count {}, token reached threshold {},token"
+                        + " count {},max token limit {},threshold count {}",
+                msgCountReached,
+                currentContextMessages.size(),
+                tokenCounterReached,
+                calculateToken,
+                autoContextConfig.maxToken,
+                thresholdToken);
 
         // Strategy 1.previous round-compress tools invocation
         Pair<Integer, Integer> toolMsgIndices =
@@ -168,12 +164,10 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
         int startIndex = toolMsgIndices.getFirst();
         int endIndex = toolMsgIndices.getSecond();
         log.info(
-                "compress tools invocation，start index "
-                        + startIndex
-                        + ", end index "
-                        + endIndex
-                        + ", tool msg count "
-                        + (endIndex - startIndex));
+                "compress tools invocation，start index {}, end index {}, tool msg count {}",
+                startIndex,
+                endIndex,
+                endIndex - startIndex);
 
         List<Msg> toolsMsg = new ArrayList<>();
         for (int i = startIndex; i <= endIndex; i++) {
@@ -257,10 +251,9 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
         }
 
         log.info(
-                "Found "
-                        + userAssistantPairs.size()
-                        + " user-assistant pairs to summarize before latest assistant at index "
-                        + latestAssistantIndex);
+                "Found {} user-assistant pairs to summarize before latest assistant at index {}",
+                userAssistantPairs.size(),
+                latestAssistantIndex);
 
         // Step 3: Process pairs from back to front to avoid index shifting issues
         boolean hasSummarized = false;
@@ -277,10 +270,10 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
             // If no messages between user and assistant (including assistant), skip
             if (startIndex > endIndex) {
                 log.info(
-                        "No messages to summarize between user at index "
-                                + userIndex
-                                + " and assistant at index "
-                                + assistantIndex);
+                        "No messages to summarize between user at index {} and assistant at index"
+                                + " {}",
+                        userIndex,
+                        assistantIndex);
                 continue;
             }
 
@@ -290,21 +283,19 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
             }
 
             log.info(
-                    "Summarizing round "
-                            + (pairIdx + 1)
-                            + ", start index "
-                            + startIndex
-                            + ", end index "
-                            + endIndex
-                            + " (including assistant), message count "
-                            + messagesToSummarize.size());
+                    "Summarizing round {}, start index {}, end index {} (including assistant),"
+                            + " message count {}",
+                    pairIdx + 1,
+                    startIndex,
+                    endIndex,
+                    messagesToSummarize.size());
 
             // Step 4: Offload original messages if contextOffLoader is available
             String uuid = null;
             if (contextOffLoader != null) {
                 uuid = UUID.randomUUID().toString();
                 contextOffLoader.offload(uuid, messagesToSummarize);
-                log.info("Offloaded messages to be summarized with uuid: " + uuid);
+                log.info("Offloaded messages to be summarized with uuid: {}", uuid);
             }
 
             // Step 5: Generate summary
@@ -318,9 +309,7 @@ public class AutoContextMemory extends StateModuleBase implements Memory {
             // Remove messages from startIndex to endIndex (including assistant, from back to front
             // to avoid index shifting)
             int removedCount = endIndex - startIndex + 1;
-            for (int i = endIndex; i >= startIndex; i--) {
-                rawMessages.remove(i);
-            }
+            rawMessages.subList(startIndex, endIndex + 1).clear();
 
             // After removal, the position where assistant was is now: assistantIndex - removedCount
             // + 1
